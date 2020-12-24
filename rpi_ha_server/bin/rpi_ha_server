@@ -74,6 +74,13 @@ class led_light(threading.Thread):
                             curTm.timestamp()-self.startTm.timestamp()))
                     
                 self.mPplCnt =  curCnt
+    
+    def get_current_status(self):
+        if 0 == self.mPplCnt:
+            return "no one is there in the room, light is off"
+        curTm = datetime.datetime.now()
+        return "there are {} person(s) present in room, light is on since {} seconds".format(
+                self.mPplCnt, curTm.timestamp()-self.startTm.timestamp())
 
 class client_socket(threading.Thread):
     global gVar
@@ -126,6 +133,10 @@ class client_socket(threading.Thread):
                 gVar.pplCnt -= 1
                 ledLight.mEventQueue.put(gVar.pplCnt)
                 resp = "person exited,total[{}]".format(gVar.pplCnt)
+            gVar.syncLock.release()
+        elif '3' == event:
+            gVar.syncLock.acquire()
+            resp = ledLight.get_current_status()
             gVar.syncLock.release()
         else:
             resp = "bad event {}".format(event)

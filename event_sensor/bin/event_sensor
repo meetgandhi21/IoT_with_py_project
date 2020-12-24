@@ -34,8 +34,9 @@ def main():
         choice = input("\nplease enter any valid option:\n"
                            "1\tto send person-in event\n"
                            "2\tto send person-out event\n"
-                           "3\texit input generator\n")
-        if choice == '3':
+                           "3\tto get current light status\n"
+                           "4\texit input generator\n")
+        if choice == '4':
             print("okay... exiting... :(")
             break
         
