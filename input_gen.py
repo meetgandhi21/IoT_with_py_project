@@ -1,16 +1,28 @@
 #!/usr/bin/env python3
 
 import socket
+import argparse
 
 def main():
+    argParser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    argParser.add_argument("-a", "--addr", default="", help="server address")
+    argParser.add_argument("-p", "--port", default=None, help="server port")
+    args = argParser.parse_args()
+    
+    if "" == args.addr:
+        print("please provide valid server address")
+        return
+
+    if None == args.port or '0' == args.port:
+        print("please provide valid server port")
+        return
+    
     keepRunning = 1
-    host = input("please enter server ip address\n")
-    port = input("please enter server port\n")
     clientSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     clientSock.settimeout(5)
     try:
-        print("trying to connect with {}:{}".format(host, port))
-        clientSock.connect((host, int(port)))
+        print("trying to connect with {}:{}".format(args.addr, args.port))
+        clientSock.connect((args.addr, int(args.port)))
     except:
         print("failed to connect socket")
         keepRunning = 0
