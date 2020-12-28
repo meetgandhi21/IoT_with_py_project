@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-
+from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
+import time
+import argparse
+import json
 import socket
 import threading
 import time
@@ -10,6 +13,8 @@ import queue
 
 global gVar
 global ledLight
+global awsPublisher
+global pubMsg
 
 HEADER = '\033[95m'
 OKBLUE = '\033[94m'
@@ -21,6 +26,13 @@ ENDC = '\033[0m'
 BOLD = '\033[1m'
 UNDERLINE = '\033[4m'
     
+def customCallback(client, userdata, message):
+    print("Received a new message: ")
+    print(message.payload)
+    print("from topic: ")
+    print(message.topic)
+    print("--------------\n\n")
+
 def print_msg(data=''):
     th = threading.current_thread()
     try:
@@ -35,18 +47,28 @@ class global_var():
         self.pplCnt = 0
         self.syncLock = threading.Lock()
 
+class pub_msg():
+    def __init__(self):
+        self.syncLock = threading.Lock()
+        self.mEventQueue = queue.Queue()
+        self.startTime = None
+        self.endTime = None
+        self.pplCnt = None
+        self.curTime = None
+        
 class led_light(threading.Thread):
     global gVar
+    global pubMsg
     def __init__(self):
         threading.Thread.__init__(self)
         self.mColour = OKYELLOW
         self.mPplCnt = 0
-        self.startTm = self.endTm = datetime.datetime.now()
         self.mEventQueue = queue.Queue()
         self.setName("Light Handler")
         self.start()
         
     def run(self):
+        evId = None
         while gVar.gKeepRunning:
             try:
                 curCnt = self.mEventQueue.get(timeout=1)
@@ -56,23 +78,23 @@ class led_light(threading.Thread):
                 if curCnt == self.mPplCnt:
                     continue
                 
-                curTm = datetime.datetime.now()
+                pubMsg.syncLock.acquire()
+                pubMsg.curTime =  datetime.datetime.now()
                 if curCnt > self.mPplCnt:
-                    print_msg("someone entered in room at [{}]".format(curTm))
+                    print_msg("someone entered in room at [{}]".format(pubMsg.curTime))
                 else:
-                    print_msg("someone exited from room at [{}]".format(curTm))
+                    print_msg("someone exited from room at [{}]".format(pubMsg.curTime))
                 
                 if 0 == self.mPplCnt:
-                    self.startTm = curTm
-                    print_msg("light started at [{}]".format(curTm))
+                    evId = 0
                 elif 0 == curCnt:
-                    self.endTm = curTm
-                    print_msg("light stopped at [{}], was active for [{}] seconds".format(curTm,
-                          self.endTm.timestamp()-self.startTm.timestamp()))
+                    evId = 1
                 else:
-                    print_msg("light is active since [{}] seconds".format(
-                            curTm.timestamp()-self.startTm.timestamp()))
-                    
+                    evId = -1
+                if -1 != evId:
+                    pubMsg.mEventQueue.put(evId)
+                pubMsg.syncLock.release()
+                
                 self.mPplCnt =  curCnt
     
     def get_current_status(self):
@@ -191,12 +213,94 @@ class server_socket(threading.Thread):
             clientTh.join()
         self.serverSock.close()
 
+class aws_publisher(threading.Thread):
+    global gVar
+    global ledLight
+    global pubMsg
+    
+    host = ''
+    port = 0
+    clientList = []
+    
+    def __init__(self, host, rootCAPath, certificatePath, privateKeyPath):
+        threading.Thread.__init__(self)
+        self.mColour = OKYELLOW
+        self.setName("aws publisher")
+        self.myAWSIoTMQTTClient = None
+        self.clientId = "rpi_ha_server"
+        try:
+            self.myAWSIoTMQTTClient = AWSIoTMQTTClient(self.clientId)
+            self.myAWSIoTMQTTClient.configureEndpoint(host, 8883)
+            self.myAWSIoTMQTTClient.configureCredentials(rootCAPath, privateKeyPath, certificatePath)
+            self.myAWSIoTMQTTClient.configureDrainingFrequency(2)  # Draining: 2 Hz
+            self.myAWSIoTMQTTClient.configureConnectDisconnectTimeout(10)  # 10 sec
+            self.myAWSIoTMQTTClient.configureMQTTOperationTimeout(5)  # 5 sec
+            # Connect and subscribe to AWS IoT
+            self.myAWSIoTMQTTClient.connect()
+
+        except Exception as initErr:
+            print_msg("failed to create aws_publisher,err[{}]".format(initErr))
+            return
+        
+        print_msg("aws_publisher created successfully")
+        self.start()
+    
+    def run(self):  
+        evId = None
+        jsonData = None
+        jsonStr = None
+        while gVar.gKeepRunning:
+            try:
+                evId = pubMsg.mEventQueue.get(timeout=1)
+            except queue.Empty as timeout:
+                continue
+            else:
+                pubMsg.syncLock.acquire()
+                if 0 == evId:
+                    pubMsg.startTime = pubMsg.curTime
+                    print_msg("".format(pubMsg.curTime))
+                    jsonData = {
+                            'start time': "".format(pubMsg.startTime)
+                        }
+                elif 1 == evId:
+                    pubMsg.endTime = pubMsg.curTime
+                    jsonData = {
+                            'start time': "".format(pubMsg.startTime),
+                            'end time': "".format(pubMsg.endTime)
+                        }
+                pubMsg.syncLock.release()
+                jsonStr = json.dumps(jsonData)
+                print_msg(jsonStr)
+                self.myAWSIoTMQTTClient.publish('light_status',jsonStr,1)
+
 def main():
     global gVar
     global ledLight
+    global awsPublisher
+    global pubMsg
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-e", "--endpoint",
+                        action="store", required=True,
+                        dest="host", help="endpoint")
+    parser.add_argument("-r", "--rootCA",
+                        action="store", required=True,
+                        dest="rootCAPath", help="path to root CA")
+    parser.add_argument("-c", "--cert",
+                        action="store", required=True,
+                        dest="certificatePath", help="client certificate path")
+    parser.add_argument("-k", "--key",
+                        action="store", required=True,
+                        dest="privateKeyPath", help="client certificate key")
+    args = parser.parse_args()
     
     gVar = global_var()
+    pubMsg = pub_msg()
     ledLight = led_light()
+    awsPublisher = aws_publisher(host=args.host,
+                                 rootCAPath=args.rootCAPath,
+                                 certificatePath=args.certificatePath,
+                                 privateKeyPath=args.privateKeyPath)
 
     tServerSock = server_socket()
     while gVar.gKeepRunning:

@@ -11,6 +11,7 @@ setup(
     packages=find_packages(),
     scripts=['bin/rpi_ha_server'],
     #add any required third party module in below list
-    install_requires=[]
+    install_requires=[
+            "AWSIoTPythonSDK"]
 )
 
