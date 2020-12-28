@@ -25,6 +25,9 @@ OKRED = '\033[91m'
 ENDC = '\033[0m'
 BOLD = '\033[1m'
 UNDERLINE = '\033[4m'
+EV_ID_START_LAMP = 0
+EV_ID_STOP_LAMP = 1
+EV_ID_PPL_CNT_CHNG = 2
     
 def customCallback(client, userdata, message):
     print("Received a new message: ")
@@ -51,10 +54,10 @@ class pub_msg():
     def __init__(self):
         self.syncLock = threading.Lock()
         self.mEventQueue = queue.Queue()
-        self.startTime = None
-        self.endTime = None
-        self.pplCnt = None
-        self.curTime = None
+        self.startTime = datetime.datetime.now()
+        self.endTime = datetime.datetime.now()
+        self.pplCnt = 0
+        self.curTime = datetime.datetime.now()
         
 class led_light(threading.Thread):
     global gVar
@@ -86,13 +89,15 @@ class led_light(threading.Thread):
                     print_msg("someone exited from room at [{}]".format(pubMsg.curTime))
                 
                 if 0 == self.mPplCnt:
-                    evId = 0
+                    evId = EV_ID_START_LAMP
+                    print_msg("Lamp started at [{}]".format(pubMsg.curTime))
                 elif 0 == curCnt:
-                    evId = 1
+                    evId = EV_ID_STOP_LAMP
+                    print_msg("Lamp stopped at [{}]".format(pubMsg.curTime))
                 else:
-                    evId = -1
-                if -1 != evId:
-                    pubMsg.mEventQueue.put(evId)
+                    evId = EV_ID_PPL_CNT_CHNG
+                pubMsg.mEventQueue.put(evId)
+                pubMsg.pplCnt =  curCnt
                 pubMsg.syncLock.release()
                 
                 self.mPplCnt =  curCnt
@@ -247,8 +252,11 @@ class aws_publisher(threading.Thread):
     
     def run(self):  
         evId = None
-        jsonData = None
+        lightJsonData = None
+        pplCntJsonData = None
+        eventStr = ''
         jsonStr = None
+        lastPplCnt = 0
         while gVar.gKeepRunning:
             try:
                 evId = pubMsg.mEventQueue.get(timeout=1)
@@ -256,22 +264,42 @@ class aws_publisher(threading.Thread):
                 continue
             else:
                 pubMsg.syncLock.acquire()
-                if 0 == evId:
+                if EV_ID_START_LAMP == evId:
                     pubMsg.startTime = pubMsg.curTime
-                    print_msg("".format(pubMsg.curTime))
-                    jsonData = {
-                            'start time': "".format(pubMsg.startTime)
+                    lightJsonData = {
+                            'status' : 'on',
+                            'start time': "{}".format(pubMsg.startTime)
                         }
-                elif 1 == evId:
+                elif EV_ID_STOP_LAMP == evId:
                     pubMsg.endTime = pubMsg.curTime
-                    jsonData = {
-                            'start time': "".format(pubMsg.startTime),
-                            'end time': "".format(pubMsg.endTime)
+                    lightJsonData = {
+                            'status' : 'off',
+                            'start time': "{}".format(pubMsg.startTime),
+                            'end time': "{}".format(pubMsg.endTime)
                         }
+                else:
+                    lightJsonData = {
+                            'status' : 'running',
+                            'active since': "{}".format(pubMsg.curTime.timestamp()-pubMsg.startTime.timestamp()),
+                            }
+                
+                if pubMsg.pplCnt > lastPplCnt:
+                    eventStr = 'person entered'
+                else:
+                    eventStr = 'person exited'
+                lastPplCnt = pubMsg.pplCnt
+                pplCntJsonData = {
+                            'event' : eventStr,
+                            'time' : "{}".format(pubMsg.curTime),
+                            'total' : lastPplCnt
+                            }
                 pubMsg.syncLock.release()
-                jsonStr = json.dumps(jsonData)
-                print_msg(jsonStr)
-                self.myAWSIoTMQTTClient.publish('light_status',jsonStr,1)
+                jsonStr = json.dumps(pplCntJsonData)
+                self.myAWSIoTMQTTClient.publish('person_cnt',jsonStr,1)
+                
+                if lightJsonData is not None:
+                    jsonStr = json.dumps(lightJsonData)
+                    self.myAWSIoTMQTTClient.publish('light_status',jsonStr,1)
 
 def main():
     global gVar
