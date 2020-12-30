@@ -106,8 +106,11 @@ class led_light(threading.Thread):
         if 0 == self.mPplCnt:
             return "no one is there in the room, light is off"
         curTm = datetime.datetime.now()
-        return "there are {} person(s) present in room, light is on since {} seconds".format(
-                self.mPplCnt, curTm.timestamp()-self.startTm.timestamp())
+        pubMsg.syncLock.acquire()
+        outStr = "there are {} person(s) present in room, light is on since {} seconds".format(
+                self.mPplCnt, curTm.timestamp()-pubMsg.startTime.timestamp())
+        pubMsg.syncLock.release()
+        return outStr
 
 class client_socket(threading.Thread):
     global gVar
@@ -120,6 +123,7 @@ class client_socket(threading.Thread):
         self.mAddr = clientAddr
         self.mSock.settimeout(1)
         self.setName("sensor-{}".format(self.mAddr[1]))
+        self.publish_status(status='connected')
         self.start()
         
     def run(self):
@@ -140,7 +144,23 @@ class client_socket(threading.Thread):
                     break
 
         print_msg("closing local connection for sensor {}".format(self.mAddr))
+        self.publish_status(status='disconnected')
         self.mSock.close()
+        
+    def publish_status(self, status):
+        sensorJsonData = {
+                    'name' : self.getName(),
+                    'event' : status,
+                    'addr' : "{}".format(self.mAddr),
+                    'time' : "{}".format(datetime.datetime.now())
+                    }
+        jsonStr = json.dumps(sensorJsonData)
+        try:
+            awsPublisher.myAWSIoTMQTTClient.publish('sensor_status',jsonStr,1)
+        except Exception as err:
+            print_msg("[sensor_status]\tfailed to publish [{}], err[{}]".format(jsonStr, err))
+        else:
+            print_msg("[sensor_status]\tpublish success [{}]".format(jsonStr))
         
     def hndl_event(self, event):
         if '1' == event:
@@ -326,7 +346,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--endpoint",
                         action="store", required=True,
-                        dest="host", help="endpoint")
+                        dest="host", help="host endpoint")
     parser.add_argument("-r", "--rootCA",
                         action="store", required=True,
                         dest="rootCAPath", help="path to root CA")
