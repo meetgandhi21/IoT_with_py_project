@@ -15,6 +15,7 @@ global gVar
 global ledLight
 global awsPublisher
 global pubMsg
+global serverSock
 
 HEADER = '\033[95m'
 OKBLUE = '\033[94m'
@@ -339,9 +340,10 @@ class aws_publisher(threading.Thread):
 
 def main():
     global gVar
+    global pubMsg
+    global serverSock
     global ledLight
     global awsPublisher
-    global pubMsg
     
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--endpoint",
@@ -366,14 +368,14 @@ def main():
                                  certificatePath=args.certificatePath,
                                  privateKeyPath=args.privateKeyPath)
 
-    tServerSock = server_socket()
+    serverSock = server_socket()
     while gVar.gKeepRunning:
         try:
             time.sleep(1)
         except KeyboardInterrupt:
             print_msg("keyboard interrupt")
             gVar.gKeepRunning = 0
-    tServerSock.join()
+    serverSock.join()
 
 if __name__ == "__main__":
     main()
