@@ -1,1 +1,1 @@
-# IoT_with_py_project
+# Home Automation Server using RPI
